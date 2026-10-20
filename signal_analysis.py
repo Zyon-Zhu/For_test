@@ -312,6 +312,40 @@ log(f"方案B(推荐) 华北外lag>10: 拦截{len(s1)}, 失效{f1}, 净收益 {n
 log(f"          + 华北depth<=3: 拦截{len(s2)}, 失效{f2}, 净收益 {netB2} 元, 误拦有效 {len(s2) - f2} 条 "
     f"(C*={netB2 / (len(s2) - f2):.2f} 元)")
 log(f"方案B合计净收益: {netB1 + netB2} 元 (比方案A 高 {netB1 + netB2 - (fA * COST_FAIL - len(sA) * COST_INTERCEPT)} 元)")
+
+# ---- A 档检查: 可加性/公式/小样本 ----
+log("")
+log("--- B1/B2 可加性检查 ---")
+inter = len(set(s1.index) & set(s2.index))
+log(f"B1∩B2 交集行数: {inter} → 两规则按节点构造互斥(B1 限定非华北, B2 限定华北), 净收益相加无重复计数")
+log(f"拦截合计 {len(s1) + len(s2)} 条 = {len(s1)}(B1) + {len(s2)}(B2)")
+log("华北 depth<=3 × lag 交叉(失效/有效):")
+h3 = hb[hb["order_depth"] <= 3]
+for lab, gdf in h3.groupby(pd.cut(h3["lag"], [-1, 10, 1e9], labels=["lag<=10", "lag>10"]), observed=True):
+    f_ = int((gdf["is_valid"] == 0).sum())
+    log(f"  {lab}: n={len(gdf)}, 失效={f_}, 有效={len(gdf) - f_}")
+log("→ 华北 depth<=3 中 lag>10 的 9 行已被 B2 覆盖, 不会落入 B1(节点互斥); lag 规则对该子集的失效无额外遗漏")
+log("")
+log("--- B1/B2 决策公式(误拦有效信号机会成本 C) ---")
+v1 = len(s1) - f1
+v2 = len(s2) - f2
+log(f"B1: 净收益 = {netB1} - {v1}×C  (V1={v1}), C*={netB1 / v1:.2f} 元 → C 超过则 B1 降级为警告/人工确认")
+log(f"B2: 净收益 = {netB2} - {v2}×C  (V2={v2}), C*={netB2 / v2:.2f} 元 → 同上")
+log("")
+log("--- 华北 depth 小样本口径 ---")
+d0 = hb[hb["order_depth"] == 0]
+f0 = int((d0["is_valid"] == 0).sum())
+lo0, hi0 = wilson(f0, len(d0))
+lom, him = wilson(f2, len(h3))
+log(f"depth=0 单独: {f0}/{len(d0)} = {f0 / len(d0):.1%}, 95%CI[{lo0:.1%}, {hi0:.1%}] → 样本仅 {len(d0)}, CI 宽, 不单独作为规则依据")
+log(f"depth<=3 合并(B2 实际作用域): {f2}/{len(h3)} = {f2 / len(h3):.1%}, 95%CI[{lom:.1%}, {him:.1%}] → B2 的 {netB2} 元净收益用合并口径计算, 不依赖 depth=0 单箱")
+log("")
+log("--- 非华北 depth<=3 单独成规则(方案 B 节点拆分依据) ---")
+o3 = oth[oth["order_depth"] <= 3]
+fo = int((o3["is_valid"] == 0).sum())
+loo, hio = wilson(fo, len(o3))
+log(f"非华北 depth<=3: n={len(o3)}, 失效={fo}, 失效率={fo / len(o3):.1%} 95%CI[{loo:.1%}, {hio:.1%}], "
+    f"净收益 {fo * COST_FAIL - len(o3) * COST_INTERCEPT} 元 → 显著为负, 非华北的 depth<=3 不构成信号, 节点拆分有据")
 log("机制解释: 其余三节点失效随滞后跳变(5.2%→31.8%), 华北失效随深度跳变(4%→61%), "
     "两套机制并存; 华北的'行情同步链路'假说不再必要, 其失效更可能是挂单簿深度风险。")
 
