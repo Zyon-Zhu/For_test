@@ -273,6 +273,48 @@ for rate in [0.0, 0.2, 0.4]:
     log(f"  若缺失行失效率={rate:.0%}: 全口径净收益 = {net10}(已知部分) - {len(m_sel) * COST_INTERCEPT}(缺失行拦截成本) "
         f"+ {extra}(缺失行挽回) = {total} 元")
 
+# ============ 十三 华北节点失效机制与节点感知规则 ============
+log("")
+log("=" * 72)
+log("十三、华北灾备节点失效机制与节点感知规则(去重后已知结果行)")
+log("=" * 72)
+hb = known[known["cluster_node"] == "华北灾备节点"]
+oth = known[known["cluster_node"] != "华北灾备节点"]
+log(f"华北已知结果 {len(hb)} 行, 失效率 {(hb['is_valid'] == 0).mean():.1%}; 其余三节点 {len(oth)} 行, 失效率 {(oth['is_valid'] == 0).mean():.1%}")
+log("--- 华北 order_depth 分箱 (对照: 其余三节点) ---")
+db = pd.cut(hb["order_depth"], [-1, 0, 3, 10, 20, 30], labels=["0", "1-3", "4-10", "11-20", "21-30"])
+for lab, gdf in hb.groupby(db, observed=True):
+    log(f"  华北 depth {lab}: n={len(gdf)}, 失效={int((gdf['is_valid'] == 0).sum())}, 失效率={(gdf['is_valid'] == 0).mean():.1%}")
+db2 = pd.cut(oth["order_depth"], [-1, 0, 3, 10, 20, 30], labels=["0", "1-3", "4-10", "11-20", "21-30"])
+for lab, gdf in oth.groupby(db2, observed=True):
+    log(f"  对照 depth {lab}: n={len(gdf)}, 失效率={(gdf['is_valid'] == 0).mean():.1%}")
+hb3 = hb[hb["order_depth"] <= 3]
+log(f"华北 depth<=3: 失效率 {(hb3['is_valid'] == 0).mean():.1%} ({int((hb3['is_valid'] == 0).sum())}/{len(hb3)}), "
+    f"占华北全部失效的 {int((hb3['is_valid'] == 0).sum())}/{int((hb['is_valid'] == 0).sum())}")
+log(f"华北 depth<=3 中 lag<=10 失效率: {(hb3[hb3['lag'] <= 10]['is_valid'] == 0).mean():.1%} "
+    f"(n={len(hb3[hb3['lag'] <= 10])}) → 华北失效由深度主导, 与滞后基本无关")
+log("--- 华北 asset_class / volume (无强模式, 仅列失效率范围) ---")
+log("  " + ", ".join(f"{v}:{(gdf['is_valid'] == 0).mean():.1%}" for v, gdf in hb.groupby("asset_class")))
+vb3 = pd.cut(hb["volume_24h"], [-1, 30, 50, 70, 1000], labels=["<=30", "31-50", "51-70", ">70"])
+log("  " + ", ".join(f"{lab}:{(gdf['is_valid'] == 0).mean():.1%}(n={len(gdf)})" for lab, gdf in hb.groupby(vb3, observed=True)))
+log("--- 节点感知规则对比 ---")
+sA = known[known["lag"] > 10]
+fA = int((sA["is_valid"] == 0).sum())
+log(f"方案A 全局lag>10: 拦截{len(sA)}, 失效{fA}, 净收益 {fA * COST_FAIL - len(sA) * COST_INTERCEPT} 元 (华北负贡献 -635 元)")
+s1 = known[(known["lag"] > 10) & (known["cluster_node"] != "华北灾备节点")]
+f1 = int((s1["is_valid"] == 0).sum())
+s2 = hb[hb["order_depth"] <= 3]
+f2 = int((s2["is_valid"] == 0).sum())
+netB1 = f1 * COST_FAIL - len(s1) * COST_INTERCEPT
+netB2 = f2 * COST_FAIL - len(s2) * COST_INTERCEPT
+log(f"方案B(推荐) 华北外lag>10: 拦截{len(s1)}, 失效{f1}, 净收益 {netB1} 元, 误拦有效 {len(s1) - f1} 条 "
+    f"(C*={netB1 / (len(s1) - f1):.2f} 元)")
+log(f"          + 华北depth<=3: 拦截{len(s2)}, 失效{f2}, 净收益 {netB2} 元, 误拦有效 {len(s2) - f2} 条 "
+    f"(C*={netB2 / (len(s2) - f2):.2f} 元)")
+log(f"方案B合计净收益: {netB1 + netB2} 元 (比方案A 高 {netB1 + netB2 - (fA * COST_FAIL - len(sA) * COST_INTERCEPT)} 元)")
+log("机制解释: 其余三节点失效随滞后跳变(5.2%→31.8%), 华北失效随深度跳变(4%→61%), "
+    "两套机制并存; 华北的'行情同步链路'假说不再必要, 其失效更可能是挂单簿深度风险。")
+
 report = "\n".join(out)
 os.makedirs("outputs", exist_ok=True)
 with open("outputs/analysis_report.txt", "w", encoding="utf-8") as fh:
