@@ -1,14 +1,16 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-signal_records.csv 专项分析 v2
+signal_records.csv 专项分析 v3.4
 v1: 去重/统一时区/lag 分箱/阈值扫描/成本口径
-v2 新增(按评审清单):
-  〇 口径总览           一 去重明细+负lag        二 去重前后对比
-  三 lag 细分箱+95%CI   四 分层稳健性(节点/资产/深度)
-  五 时间维度(日/小时)  六 volume_24h 混杂检查
-  七 完整阈值扫描+误拦明细+盈亏平衡机会成本
-  八 成本参数敏感性     九 bootstrap 1000 次
-  十 lag×depth 网格     十一 红/黄/绿分级规则    十二 缺失行画像与敏感性
+v2: 口径明细/CI/分层/时间与 volume/成本敏感性/bootstrap/组合规则/缺失敏感性/华北机制
+v3: 方案 B（节点感知规则）、B1/B2 可加性与分节点粒度
+v3.3: 方案 B 分项 bootstrap、漏拦覆盖率、子规则成本敏感性与口径卫生审计
+v3.4: 数字可追溯性审计（空箱显式输出/分日期延迟失效率/失效损失敏感性/联合 bootstrap 说明）
+
+报告结构:
+  〇口径; ①质量去重; ②去重前后; ③lag 分箱+CI; ④分层; ⑤时间;
+  ⑥volume; ⑦阈值; ⑧成本敏感性; ⑨全局 bootstrap; ⑩lag×depth 网格;
+  ⑪分级; ⑫缺失敏感性; ⑬华北机制/方案 B; ⑭方案 B bootstrap/覆盖率/口径审计
 输出: outputs/analysis_report.txt
 """
 import os
@@ -89,8 +91,9 @@ sel_dup = dup_removed[(dup_removed["lag"] > 10) & dup_removed["is_valid"].notna(
 f_dup = int((sel_dup["is_valid"] == 0).sum())
 log(f"差额构成: 被移除的 {len(dup_removed)} 行重复行中 lag>10 且已知结果 {len(sel_dup)} 行、其中失效 {f_dup} → "
     f"原始口径净收益虚高 {f_dup * COST_FAIL - len(sel_dup) * COST_INTERCEPT} 元")
-log(f"lag 取值空档: lag=9/10/11/12 的行数 = "
-    f"{[int((df['lag'] == v).sum()) for v in [9, 10, 11, 12]]} → 阈值 8/10/12 拦截数相同, 阈值选择天然稳健")
+log(f"lag 精确值行数: lag=9/10/11/12 = "
+    f"{[int((df['lag'] == v).sum()) for v in [9, 10, 11, 12]]}")
+log("阈值平台解释: lag=9/10/11 无观测; 阈值8与10拦截数相同(225/225), 阈值12为219, 属同一收益平台而非拦截数完全相同")
 
 # ============ 三 lag 细分箱 + CI ============
 log("")
@@ -105,6 +108,9 @@ for lab, gdf in known.groupby("b", observed=True):
     f = int((gdf["is_valid"] == 0).sum())
     lo, hi = wilson(f, n)
     log(f"{lab:>6} | n={n:>4} | 失效={f:>3} | 失效率={f / n:>6.1%} | 95%CI=[{lo:.1%}, {hi:.1%}]")
+empty_8_10 = known[known["b"].isna() & (known["lag"] > 8) & (known["lag"] <= 10)]
+log(f" 8-10 | n={len(empty_8_10):>4} | lag=9/10 无观测；该箱为空，不能称为8→10相邻箱直接跳变")
+log(f"lag 最大值: {df['lag'].max():.0f} 分钟")
 
 # ============ 四 分层稳健性 ============
 log("")
@@ -143,8 +149,13 @@ log("--- 按日期(signal_time UTC 日期) ---")
 for date, gdf in df.groupby(df["signal_utc"].dt.date):
     gk = gdf[gdf["is_valid"].notna()]
     fr = 1 - gk["is_valid"].mean() if len(gk) else float("nan")
+    gh = gk[gk["lag"] > 10]
+    gl = gk[gk["lag"] <= 10]
+    fr_hi = (gh["is_valid"] == 0).mean() if len(gh) else float("nan")
+    fr_lo = (gl["is_valid"] == 0).mean() if len(gl) else float("nan")
     log(f"  {date}: n={len(gdf)}, 已知={len(gk)}, lag中位={gdf['lag'].median():.0f}m, "
-        f"lag>10占比={(gdf['lag'] > 10).mean():.1%}, 失效率={fr:.1%}")
+        f"lag>10占比={(gdf['lag'] > 10).mean():.1%}, 失效率={fr:.1%}, "
+        f"lag>10失效率={fr_hi:.1%}(n={len(gh)}), lag<=10失效率={fr_lo:.1%}(n={len(gl)})")
 log("--- 按小时(已知结果行) ---")
 for h, gdf in known.groupby(known["signal_utc"].dt.hour):
     log(f"  {h:02d}时: n={len(gdf)}, 失效率={(gdf['is_valid'] == 0).mean():.1%}, lag中位={gdf['lag'].median():.0f}m")
@@ -393,6 +404,7 @@ for i in range(1000):
     a_ = f1_ * COST_FAIL - int(m1.sum()) * COST_INTERCEPT
     b_ = f2_ * COST_FAIL - int(m2.sum()) * COST_INTERCEPT
     nb[i] = [a_, b_, a_ + b_]
+log("Bootstrap 口径: 同一次重采样用同一批行同时计算 B1、B2 与合计；合计 CI 为联合重采样，不是两个边际 CI 端点相加。")
 for j, nm in enumerate(["B1", "B2", "B1+B2"]):
     lo_b, hi_b = np.percentile(nb[:, j], [2.5, 97.5])
     log(f"{nm:>5} 净收益 95%CI[{lo_b:.0f}, {hi_b:.0f}], 均值={nb[:, j].mean():.0f}, "
@@ -423,12 +435,17 @@ log("→ 剩余 22 条失效分散在四节点(7/6/5/4), lag 多在 10 分钟内
 log("")
 log("--- 成本敏感性: B1/B2 分别看(勿用'整体转负'表述) ---")
 for ci_ in [10, 20, 30, 40]:
-    n1_, *_ = f1 * COST_FAIL - len(s1) * ci_, None, None
+    n1_ = f1 * COST_FAIL - len(s1) * ci_
     n2_ = f2 * COST_FAIL - len(s2) * ci_
     log(f"拦截成本 {ci_:>2} 元: B1 净 {n1_:+5d} 元 ({'正' if n1_ > 0 else '负'}) | "
         f"B2 净 {n2_:+5d} 元 ({'正' if n2_ > 0 else '负'})")
-log(f"→ 拦截成本升到 40 元时 B1 转负({f1 * COST_FAIL - len(s1) * 40:+d}), B2 仍为正"
-    f"({f2 * COST_FAIL - len(s2) * 40:+d}); 两子规则转负点不同, 不可合并表述")
+log("失效损失敏感性(拦截成本固定20元):")
+for cf_ in [50, 75, 150]:
+    n1_ = f1 * cf_ - len(s1) * COST_INTERCEPT
+    n2_ = f2 * cf_ - len(s2) * COST_INTERCEPT
+    log(f"  每次失效损失 {cf_:>3} 元: B1 净 {n1_:+5d} 元 | B2 净 {n2_:+5d} 元")
+log(f"→ 拦截成本升到40元时 B1 转负({f1 * COST_FAIL - len(s1) * 40:+d}), B2仍正({f2 * COST_FAIL - len(s2) * 40:+d}); "
+    "失效损失降到50元时 B1/B2 仍分别为正；各子规则需分别评估, 不用'规则整体转负'概括")
 
 # ---- 华北 depth<=3 × lag 四格 ----
 log("")
@@ -471,3 +488,5 @@ os.makedirs("outputs", exist_ok=True)
 with open("outputs/analysis_report.txt", "w", encoding="utf-8") as fh:
     fh.write(report + "\n")
 print(report)
+
+
