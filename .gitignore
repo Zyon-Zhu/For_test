@@ -44,3 +44,6 @@ venv/
 # ---- Local scratch ----
 *.local
 tmp/
+
+# ---- Harness agent memory ----
+.agents/
