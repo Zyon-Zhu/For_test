@@ -47,3 +47,7 @@ tmp/
 
 # ---- Harness agent memory ----
 .agents/
+
+# ---- temp analysis scratch ----
+.*.py
+.hb.py
