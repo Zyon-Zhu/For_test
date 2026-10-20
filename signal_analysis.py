@@ -346,6 +346,27 @@ fo = int((o3["is_valid"] == 0).sum())
 loo, hio = wilson(fo, len(o3))
 log(f"非华北 depth<=3: n={len(o3)}, 失效={fo}, 失效率={fo / len(o3):.1%} 95%CI[{loo:.1%}, {hio:.1%}], "
     f"净收益 {fo * COST_FAIL - len(o3) * COST_INTERCEPT} 元 → 显著为负, 非华北的 depth<=3 不构成信号, 节点拆分有据")
+log("")
+log("--- 分节点粒度检查: depth 机制是否只在华北(回应'其他区域呢') ---")
+log(f"{'节点':>8} | {'depth<=3':>16} | {'depth>3':>8} | {'lag>10':>8} | {'lag<=10':>8}")
+for node in ["华东主节点", "华南边缘节点", "西南测试节点", "华北灾备节点"]:
+    gdf = known[known["cluster_node"] == node]
+    d3n = gdf[gdf["order_depth"] <= 3]
+    d4n = gdf[gdf["order_depth"] > 3]
+    lgn = gdf[gdf["lag"] > 10]
+    lln = gdf[gdf["lag"] <= 10]
+    f3n = int((d3n["is_valid"] == 0).sum())
+    lo3n, hi3n = wilson(f3n, len(d3n)) if len(d3n) else (float("nan"), float("nan"))
+    log(f"{node:>8} | {f3n}/{len(d3n)}={f3n / len(d3n):.1%} CI[{lo3n:.1%},{hi3n:.1%}] | "
+        f"{int((d4n['is_valid'] == 0).sum())}/{len(d4n)}={ (d4n['is_valid'] == 0).mean():.1%} | "
+        f"{int((lgn['is_valid'] == 0).sum())}/{len(lgn)}={ (lgn['is_valid'] == 0).mean():.1%} | "
+        f"{int((lln['is_valid'] == 0).sum())}/{len(lln)}={ (lln['is_valid'] == 0).mean():.1%}")
+for node in ["华东主节点", "华南边缘节点", "西南测试节点"]:
+    gdf = known[(known["cluster_node"] == node) & (known["order_depth"] <= 3)]
+    fn = int((gdf["is_valid"] == 0).sum())
+    log(f"{node} depth<=3 单独规则: 拦{len(gdf)} 失{fn} 净{fn * COST_FAIL - len(gdf) * COST_INTERCEPT} 元")
+log("→ 三节点 depth<=3 失效率 5.7%/12.9%/16.7%, CI 均覆盖合并基线 12%, 单独成规则全部为负 "
+    "(−550/−320/−315) → depth 机制为华北特有, 无需再扩规则; lag>10 在三个节点均显著高于 lag<=10 (43.4%~57.1% vs 1.9%~3.0%), B1 三节点合并有分节点证据支撑")
 log("机制解释: 其余三节点失效随滞后跳变(5.2%→31.8%), 华北失效随深度跳变(4%→61%), "
     "两套机制并存; 华北的'行情同步链路'假说不再必要, 其失效更可能是挂单簿深度风险。")
 
