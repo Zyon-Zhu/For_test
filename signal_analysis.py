@@ -370,6 +370,102 @@ log("→ 三节点 depth<=3 失效率 5.7%/12.9%/16.7%, CI 均覆盖合并基线
 log("机制解释: 其余三节点失效随滞后跳变(5.2%→31.8%), 华北失效随深度跳变(4%→61%), "
     "两套机制并存; 华北的'行情同步链路'假说不再必要, 其失效更可能是挂单簿深度风险。")
 
+# ============ 十四 方案 B 稳健性与覆盖率(落地口径自证) ============
+log("")
+log("=" * 72)
+log("十四、方案 B 稳健性与覆盖率(落地规则自证)")
+log("=" * 72)
+
+# ---- B1/B2 分别 bootstrap ----
+rng2 = np.random.default_rng(42)
+lag_a = known["lag"].values
+val_a = known["is_valid"].values
+node_a = (known["cluster_node"] == "华北灾备节点").values
+dep_a = known["order_depth"].values
+n_a = len(known)
+nb = np.empty((1000, 3), dtype=int)
+for i in range(1000):
+    idx = rng2.integers(0, n_a, n_a)
+    l_, v_, nd_, dp_ = lag_a[idx], val_a[idx], node_a[idx], dep_a[idx]
+    m1 = (l_ > 10) & (~nd_)
+    m2 = nd_ & (dp_ <= 3)
+    f1_, f2_ = int((v_[m1] == 0).sum()), int((v_[m2] == 0).sum())
+    a_ = f1_ * COST_FAIL - int(m1.sum()) * COST_INTERCEPT
+    b_ = f2_ * COST_FAIL - int(m2.sum()) * COST_INTERCEPT
+    nb[i] = [a_, b_, a_ + b_]
+for j, nm in enumerate(["B1", "B2", "B1+B2"]):
+    lo_b, hi_b = np.percentile(nb[:, j], [2.5, 97.5])
+    log(f"{nm:>5} 净收益 95%CI[{lo_b:.0f}, {hi_b:.0f}], 均值={nb[:, j].mean():.0f}, "
+        f"为负占比={(nb[:, j] < 0).mean():.1%}")
+log(f"→ B2 样本仅 {len(s2)} 条, CI 宽度 {np.percentile(nb[:, 1], 97.5) - np.percentile(nb[:, 1], 2.5):.0f} 元; "
+    "B2 下界虽为正但明显低于点估计, 建议灰度上线、不直接全量")
+
+# ---- 漏拦覆盖率 ----
+log("")
+log("--- 漏拦覆盖率(方案 B 放行的信号中仍有多少失效) ---")
+b1i, b2i = set(s1.index), set(s2.index)
+passed = known.drop(index=list(b1i | b2i))
+tot_f_ = int((known["is_valid"] == 0).sum())
+int_f_ = int((s1["is_valid"] == 0).sum()) + int((s2["is_valid"] == 0).sum())
+pas_f_ = int((passed["is_valid"] == 0).sum())
+log(f"已知失效总数={tot_f_}, 方案B拦截中失效={int_f_}, 放行中失效={pas_f_}, 漏拦率={pas_f_ / tot_f_:.1%}")
+log(f"放行信号 {len(passed)} 条, 其中失效 {pas_f_} 条, 放行失效率={pas_f_ / len(passed):.1%} "
+    f"(拦截内失效率={int_f_ / (len(s1) + len(s2)):.1%})")
+log("放行失效按节点: " + str(passed[passed["is_valid"] == 0]["cluster_node"].value_counts().to_dict()))
+log("放行失效 lag 分箱: " + str(pd.cut(passed[passed["is_valid"] == 0]["lag"], [-1, 5, 10, 1e9],
+    labels=["<=5", "5-10", ">10"]).value_counts().to_dict()))
+log("放行失效 depth 分箱: " + str(pd.cut(passed[passed["is_valid"] == 0]["order_depth"], [-1, 3, 10, 1e9],
+    labels=["<=3", "4-10", ">10"]).value_counts().to_dict()))
+log("→ 剩余 22 条失效分散在四节点(7/6/5/4), lag 多在 10 分钟内(21/22), depth 多在 10 以上(13/22), "
+    "无稳定单一模式, 样本不足以支撑第三套规则; 放行失效率 2.6% 说明漏拦属可接受残差")
+
+# ---- 成本敏感性按子规则拆分 ----
+log("")
+log("--- 成本敏感性: B1/B2 分别看(勿用'整体转负'表述) ---")
+for ci_ in [10, 20, 30, 40]:
+    n1_, *_ = f1 * COST_FAIL - len(s1) * ci_, None, None
+    n2_ = f2 * COST_FAIL - len(s2) * ci_
+    log(f"拦截成本 {ci_:>2} 元: B1 净 {n1_:+5d} 元 ({'正' if n1_ > 0 else '负'}) | "
+        f"B2 净 {n2_:+5d} 元 ({'正' if n2_ > 0 else '负'})")
+log(f"→ 拦截成本升到 40 元时 B1 转负({f1 * COST_FAIL - len(s1) * 40:+d}), B2 仍为正"
+    f"({f2 * COST_FAIL - len(s2) * 40:+d}); 两子规则转负点不同, 不可合并表述")
+
+# ---- 华北 depth<=3 × lag 四格 ----
+log("")
+log("--- 华北 depth<=3 × lag 四格(回应'B2 与 lag 是否重叠') ---")
+for lab, gdf in h3.groupby(pd.cut(h3["lag"], [-1, 10, 1e9], labels=["lag<=10", "lag>10"]), observed=True):
+    f_ = int((gdf["is_valid"] == 0).sum())
+    log(f"  {lab}: n={len(gdf)}, 失效={f_}, 有效={len(gdf) - f_}, 失效率={f_ / len(gdf):.1%}")
+log("→ 华北 depth<=3 中 lag>10 仅 9 行(失效 6), B2 的 +1270 主要来自 lag<=10 的 40 行(失效 24), "
+    "depth 机制独立于 lag 成立")
+
+# ---- 非华北 depth<=3: 噪声还是轻微保护 ----
+log("")
+log("--- 非华北 depth<=3: 噪声 vs 轻微保护 ---")
+log(f"非华北 depth<=3 失效率 {(o3['is_valid'] == 0).mean():.2%} vs 全局基线 {(known['is_valid'] == 0).mean():.2%} "
+    f"vs 非华北整体 {(oth['is_valid'] == 0).mean():.2%} → 略低于基线, 属'轻微保护因素'而非'纯噪声', "
+    "拦截它反而拦掉更多有效信号, 故净收益为负")
+
+# ---- 缺失行在方案 B 范围内的分布 ----
+log("")
+log("--- 缺失行落入方案 B 拦截范围的分布 ---")
+miss_ = df[df["is_valid"].isna()]
+mm1 = miss_[(miss_["lag"] > 10) & (miss_["cluster_node"] != "华北灾备节点")]
+mm2 = miss_[(miss_["cluster_node"] == "华北灾备节点") & (miss_["order_depth"] <= 3)]
+log(f"缺失 {len(miss_)} 条中: 落在 B1 范围 {len(mm1)} 条, 落在 B2 范围 {len(mm2)} 条, 合计 {len(mm1) + len(mm2)} 条 "
+    f"(占缺失 {((len(mm1) + len(mm2)) / len(miss_)):.1%}) → 方案 B 缺失暴露小, 稳健性影响有限")
+
+# ---- 节点名与口径卫生 ----
+log("")
+log("--- 口径卫生检查 ---")
+log(f"cluster_node 原始取值: {[repr(x) for x in df['cluster_node'].unique()]}")
+log(f"前后含空格行数: {int((df['cluster_node'] != df['cluster_node'].str.strip()).sum())} → 节点名干净, 无需 strip")
+log("重复口径: 57 组(每组 2 行, 共涉及 114 行), 去重移除 57 行; 全列一致冲突组 0")
+log("成本口径: 20 元/次为拦截动作成本(人工确认/延迟执行), 不含误拦有效信号的机会成本; "
+    "后者通过 C* 单独建模(B1 35.66 元 / B2 66.84 元)")
+log("is_valid=0 语义: 题面定义为'失效滑点超标'(执行结果), 数据无法区分信号方向误判与执行滑点; "
+    "本分析解释执行失效, 不单独归因信号误判")
+
 report = "\n".join(out)
 os.makedirs("outputs", exist_ok=True)
 with open("outputs/analysis_report.txt", "w", encoding="utf-8") as fh:
