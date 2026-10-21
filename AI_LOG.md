@@ -118,3 +118,16 @@
   2. 用 **DSH 运行时 Python**（系统 Python 3.14 缺 python-dateutil，pandas 直接 ImportError）重跑 `signal_analysis.py`：exit=0，`git status` 无变化——证明入库报告与脚本输出**字节级一致**，随机种子固定（`default_rng(42)`，第九/十四节各一次）。
   3. README 补记 v3.4 与 v3.5 两条改进记录；复盘报告结论改为与验证表逐项对应的**十项验证**，并把去重前后对比、Wilson CI 归位到"数据处理与诊断阶段"表述。
   4. 交互 4 两处旧表述加"v3.4 复核修正"标注，**保留原始错误原文不改写**（AI_LOG 的价值在留痕，不在粉饰）。
+
+## 交互 11（v3.6：复现健壮性修复）
+
+- 提示词："整体回顾一下当前工作区执行任务的状态，深挖一下有没有什么漏洞和遗漏，或者有没有什么还能改进的地方"→"帮我修复一下你发现的问题"。
+- AI 输出/建议：深挖复核时 AI 按旧记忆给脚本传 `--out` 参数（实际脚本无任何命令行参数），随后在不设 PYTHONIOENCODING 的 GBK 控制台直接重跑，得到 exit=1。
+- 哪里不对：
+  1. **脚本在 GBK 控制台崩溃（实锤）**：末尾 `print(report)` 遇报告中"−"(U+2212) 抛 `UnicodeEncodeError`、退出码 1；`outputs/analysis_report.txt` 其实在 print 之前已正确写盘。评审若照 README 复现步骤在中文 Windows 重跑，会误以为脚本损坏。
+  2. **记忆库自身错误**：项目记忆曾写脚本"可选 --out 文件"，与事实不符（无 argparse/sys.argv，输出路径硬编码为相对路径，cwd 必须是仓库根）；已当场修正记忆。
+  3. **README 复现步骤缺运行环境说明**：未提 cwd 要求与中文控制台编码问题。
+- 我如何修改/验证：
+  1. 脚本 imports 后加 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`（带 `hasattr` 保护），docstring 记 v3.6；分析逻辑与结论数字零改动。
+  2. 用 DSH 运行时 Python **不设 PYTHONIOENCODING** 重跑：exit=0、`git status` 干净——`outputs/analysis_report.txt` blob（ff29b120）与 v3.5 入库版逐字节一致，证明修复不改变报告内容。
+  3. README 复现步骤补 cwd 说明与 GBK 崩溃修复说明；改进记录追加 v3.6 条目。

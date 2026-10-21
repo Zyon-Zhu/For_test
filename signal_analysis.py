@@ -6,6 +6,7 @@ v2: 口径明细/CI/分层/时间与 volume/成本敏感性/bootstrap/组合规�
 v3: 方案 B（节点感知规则）、B1/B2 可加性与分节点粒度
 v3.3: 方案 B 分项 bootstrap、漏拦覆盖率、子规则成本敏感性与口径卫生审计
 v3.4: 数字可追溯性审计（空箱显式输出/分日期延迟失效率/失效损失敏感性/联合 bootstrap 说明）
+v3.6: 复现健壮性——GBK 控制台 print(report) 因“−”(U+2212) UnicodeEncodeError 崩溃修复，stdout 强制 UTF-8
 
 报告结构:
   〇口径; ①质量去重; ②去重前后; ③lag 分箱+CI; ④分层; ⑤时间;
@@ -14,8 +15,15 @@ v3.4: 数字可追溯性审计（空箱显式输出/分日期延迟失效率/失
 输出: outputs/analysis_report.txt
 """
 import os
+import sys
 import numpy as np
 import pandas as pd
+
+# 复现健壮性(v3.6): 中文 Windows 控制台默认 GBK, 报告含“−”(U+2212)等字符时
+# 末尾 print(report) 会抛 UnicodeEncodeError 使退出码为 1(报告文件此前已正确写盘)。
+# 强制 stdout 为 UTF-8, 不可编码字符以 errors="replace" 降级; 不影响报告文件字节内容。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 COST_FAIL = 75        # 每次信号失效损失(元)
 COST_INTERCEPT = 20   # 每次陈旧行情拦截成本(元)
